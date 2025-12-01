@@ -28,7 +28,7 @@ template to start your work.
 ### 1. Setup your repository
 
 Create a private copy of [the template repository](https://github.com/SaxonNB/CS307ProjectII) by clicking
-or [download a zip copy](https://github.com/hezean/sustc/archive/refs/heads/main.zip) to work without using git.
+or [download a zip copy](https://github.com/SaxonNB/CS307ProjectII/archive/refs/heads/main.zip) to work without using git.
 
 ### 2. Understand the project structure
 
