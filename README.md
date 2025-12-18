@@ -48,7 +48,7 @@ or [download a zip copy](https://github.com/SaxonNB/CS307ProjectII/archive/refs/
 │                            └... DatabaseServiceImpl.java
 └── sustc-runner                                           # We've provided you an interactive command line runner, a benchmark runner with sample data, and unit tests
     ├── compose.yml                                        # You may optionally use a container-based database to prevent polluting your local database
-    ├── data                                               # Contains records to import and test cases
+    ├── data             v                                  # Contains records to import and test cases
     └── src/main
             ├── java
             │   └── io.sustc
