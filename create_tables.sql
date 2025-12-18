@@ -1,12 +1,13 @@
 -- users实体
 CREATE TABLE users (
-                       author_id      SERIAL PRIMARY KEY,
+                       author_id      BIGSERIAL PRIMARY KEY,
                        author_name    VARCHAR(100) NOT NULL,
-                       gender         VARCHAR(10)  CHECK (gender IN ('Male','Female')),
+                       gender         VARCHAR(10)  CHECK (gender IN ('Male','Female','UNKNOWN')),
                        age            INT,
-                       following_cnt  INT,   --  派生属性
-                       follower_cnt   INT,    -- 派生属性
-                       password       VARCHAR(100) NOT NULL
+                       followings     INT,   --  派生属性
+                       followers      INT,    -- 派生属性
+                       password       VARCHAR(100) NOT NULL,
+                       is_deleted   BOOLEAN NOT NULL DEFAULT FALSE
 );
 -- 自连接：关注关系
 CREATE TABLE follows (
@@ -16,43 +17,44 @@ CREATE TABLE follows (
 );
 --recipe实体
 CREATE TABLE recipe (
-                        recipe_id       SERIAL PRIMARY KEY,
+                        recipe_id       BIGSERIAL PRIMARY KEY,
                         author_id       INT REFERENCES users(author_id),
                         dish_name       VARCHAR(150) NOT NULL,
-                        date_published  DATE,
-                        cook_time       INTERVAL,
-                        prep_time       INTERVAL,
+                        date_published  TIMESTAMP,
+                        cook_time       VARCHAR(50),
+                        prep_time       VARCHAR(50),
+                        total_time      VARCHAR(50),
                         description     TEXT,
                         category        VARCHAR(100),
-                        aggr_rating     DECIMAL(3,2), --派生
-                        review_cnt      INT,       -- 派生
+                        aggr_rating     REAL CHECK (AggregatedRating >= 0 AND AggregatedRating <= 5), --派生
+                        review_cnt      INT,         -- 派生
                         yield           VARCHAR(50), --分量（带计量单位）
-                        servings       VARCHAR(50), --几个人吃
-                        calories        DECIMAL(8,2),
-                        fat             DECIMAL(8,2),
-                        saturated_fat   DECIMAL(8,2),
-                        cholesterol     DECIMAL(8,2),
-                        sodium          DECIMAL(8,2),
-                        carbohydrate    DECIMAL(8,2),
-                        fiber           DECIMAL(8,2),
-                        sugar           DECIMAL(8,2),
-                        protein         DECIMAL(8,2)
+                        servings        INT, --几个人吃
+                        calories        REAL,
+                        fat             REAL,
+                        saturated_fat   REAL,
+                        cholesterol     REAL,
+                        sodium          REAL,
+                        carbohydrate    REAL,
+                        fiber           REAL,
+                        sugar           REAL,
+                        protein         REAL
 );
 
 --review实体
 CREATE TABLE review (
-                        review_id     SERIAL PRIMARY KEY,
-                        recipe_id     INT REFERENCES recipe(recipe_id),
-                        author_id     INT REFERENCES users(author_id),
-                        rating        DECIMAL(3,2),
-                        review_text   TEXT,
-                        date_submit   DATE,
-                        date_modify   DATE
+                        review_id        BIGSERIAL PRIMARY KEY,
+                        recipe_id        BIGINT REFERENCES recipe(recipe_id),
+                        author_id        BIGINT REFERENCES users(author_id),
+                        rating           REAL,
+                        review_text      TEXT,
+                        date_submitted   TIMESTAMP,
+                        date_modified    TIMESTAMP
 );
 -- user likes review，多对多
 CREATE TABLE likes_review (
-                              author_id INT REFERENCES users(author_id),
-                              review_id INT REFERENCES review(review_id),
+                              author_id BIGINT REFERENCES users(author_id),
+                              review_id BIGINT REFERENCES review(review_id),
                               PRIMARY KEY (author_id, review_id)
 );
 -- ingredient实体
