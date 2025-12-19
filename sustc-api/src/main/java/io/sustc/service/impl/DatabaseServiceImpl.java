@@ -67,83 +67,80 @@ public class DatabaseServiceImpl implements DatabaseService {
 
     private void createTables() {
         String[] createTableSQLs = {
-                // 创建users表
+
+                // users 表
                 "CREATE TABLE IF NOT EXISTS users (" +
-                        "    AuthorId BIGINT PRIMARY KEY, " +
-                        "    AuthorName VARCHAR(255) NOT NULL, " +
-                        "    Gender VARCHAR(10) CHECK (Gender IN ('Male', 'Female')), " +
-                        "    Age INTEGER CHECK (Age > 0), " +
-                        "    Followers INTEGER DEFAULT 0 CHECK (Followers >= 0), " +
-                        "    Following INTEGER DEFAULT 0 CHECK (Following >= 0), " +
-                        "    Password VARCHAR(255), " +
-                        "    IsDeleted BOOLEAN DEFAULT FALSE" +
+                        "author_id BIGSERIAL PRIMARY KEY, " +
+                        "author_name VARCHAR(100) NOT NULL, " +
+                        "gender VARCHAR(10) CHECK (gender IN ('Male','Female','UNKNOWN')), " +
+                        "age INT, " +
+                        "following INT DEFAULT 0, " +
+                        "followers INT DEFAULT 0, " +
+                        "password VARCHAR(255) NOT NULL, " +
+                        "is_deleted BOOLEAN NOT NULL DEFAULT FALSE" +
                         ")",
 
-                // 创建recipes表
-                "CREATE TABLE IF NOT EXISTS recipes (" +
-                        "    RecipeId BIGINT PRIMARY KEY, " +
-                        "    Name VARCHAR(500) NOT NULL, " +
-                        "    AuthorId BIGINT NOT NULL, " +
-                        "    CookTime VARCHAR(50), " +
-                        "    PrepTime VARCHAR(50), " +
-                        "    TotalTime VARCHAR(50), " +
-                        "    DatePublished TIMESTAMP, " +
-                        "    Description TEXT, " +
-                        "    RecipeCategory VARCHAR(255), " +
-                        "    AggregatedRating DECIMAL(3,2) CHECK (AggregatedRating >= 0 AND AggregatedRating <= 5), " +
-                        "    ReviewCount INTEGER DEFAULT 0 CHECK (ReviewCount >= 0), " +
-                        "    Calories DECIMAL(10,2), " +
-                        "    FatContent DECIMAL(10,2), " +
-                        "    SaturatedFatContent DECIMAL(10,2), " +
-                        "    CholesterolContent DECIMAL(10,2), " +
-                        "    SodiumContent DECIMAL(10,2), " +
-                        "    CarbohydrateContent DECIMAL(10,2), " +
-                        "    FiberContent DECIMAL(10,2), " +
-                        "    SugarContent DECIMAL(10,2), " +
-                        "    ProteinContent DECIMAL(10,2), " +
-                        "    RecipeServings VARCHAR(100), " +
-                        "    RecipeYield VARCHAR(100), " +
-                        "    FOREIGN KEY (AuthorId) REFERENCES users(AuthorId)" +
+                // follows 表（用户关注关系）
+                "CREATE TABLE IF NOT EXISTS follows (" +
+                        "blogger_id BIGINT REFERENCES users(author_id), " +
+                        "follower_id BIGINT REFERENCES users(author_id), " +
+                        "PRIMARY KEY (blogger_id, follower_id)" +
                         ")",
 
-                // 创建reviews表
-                "CREATE TABLE IF NOT EXISTS reviews (" +
-                        "    ReviewId BIGINT PRIMARY KEY, " +
-                        "    RecipeId BIGINT NOT NULL, " +
-                        "    AuthorId BIGINT NOT NULL, " +
-                        "    Rating INTEGER, " +
-                        "    Review TEXT, " +
-                        "    DateSubmitted TIMESTAMP, " +
-                        "    DateModified TIMESTAMP, " +
-                        "    FOREIGN KEY (RecipeId) REFERENCES recipes(RecipeId), " +
-                        "    FOREIGN KEY (AuthorId) REFERENCES users(AuthorId)" +
+                // recipe 表
+                "CREATE TABLE IF NOT EXISTS recipe (" +
+                        "recipe_id BIGSERIAL PRIMARY KEY, " +
+                        "author_id BIGINT REFERENCES users(author_id), " +
+                        "dish_name VARCHAR(150) NOT NULL, " +
+                        "date_published TIMESTAMP, " +
+                        "cook_time VARCHAR(50), " +
+                        "prep_time VARCHAR(50), " +
+                        "description TEXT, " +
+                        "category VARCHAR(100), " +
+                        "aggr_rating REAL CHECK (aggr_rating >= 0 AND aggr_rating <= 5), " +
+                        "review_cnt INT DEFAULT 0, " +
+                        "recipe_yield VARCHAR(50), " +
+                        "servings INT, " +
+                        "calories REAL, " +
+                        "fat REAL, " +
+                        "saturated_fat REAL, " +
+                        "cholesterol REAL, " +
+                        "sodium REAL, " +
+                        "carbohydrate REAL, " +
+                        "fiber REAL, " +
+                        "sugar REAL, " +
+                        "protein REAL" +
                         ")",
 
-                // 创建recipe_ingredients表
-                "CREATE TABLE IF NOT EXISTS recipe_ingredients (" +
-                        "    RecipeId BIGINT, " +
-                        "    IngredientPart VARCHAR(500), " +
-                        "    PRIMARY KEY (RecipeId, IngredientPart), " +
-                        "    FOREIGN KEY (RecipeId) REFERENCES recipes(RecipeId)" +
+                // review 表
+                "CREATE TABLE IF NOT EXISTS review (" +
+                        "review_id BIGSERIAL PRIMARY KEY, " +
+                        "recipe_id BIGINT REFERENCES recipe(recipe_id), " +
+                        "author_id BIGINT REFERENCES users(author_id), " +
+                        "rating REAL, " +
+                        "review TEXT, " +
+                        "date_submitted TIMESTAMP, " +
+                        "date_modified TIMESTAMP" +
                         ")",
 
-                // 创建review_likes表
-                "CREATE TABLE IF NOT EXISTS review_likes (" +
-                        "    ReviewId BIGINT, " +
-                        "    AuthorId BIGINT, " +
-                        "    PRIMARY KEY (ReviewId, AuthorId), " +
-                        "    FOREIGN KEY (ReviewId) REFERENCES reviews(ReviewId), " +
-                        "    FOREIGN KEY (AuthorId) REFERENCES users(AuthorId)" +
+                // likes_review 表（评论点赞）
+                "CREATE TABLE IF NOT EXISTS likes_review (" +
+                        "author_id BIGINT REFERENCES users(author_id), " +
+                        "review_id BIGINT REFERENCES review(review_id), " +
+                        "PRIMARY KEY (author_id, review_id)" +
                         ")",
 
-                // 创建user_follows表
-                "CREATE TABLE IF NOT EXISTS user_follows (" +
-                        "    FollowerId BIGINT, " +
-                        "    FollowingId BIGINT, " +
-                        "    PRIMARY KEY (FollowerId, FollowingId), " +
-                        "    FOREIGN KEY (FollowerId) REFERENCES users(AuthorId), " +
-                        "    FOREIGN KEY (FollowingId) REFERENCES users(AuthorId), " +
-                        "    CHECK (FollowerId != FollowingId)" +
+                // ingredient 表
+                "CREATE TABLE IF NOT EXISTS ingredient (" +
+                        "ingredient_id BIGSERIAL PRIMARY KEY, " +
+                        "ingredient_name VARCHAR(100) UNIQUE NOT NULL" +
+                        ")",
+
+                // has_ingredient 表（菜谱-配料）
+                "CREATE TABLE IF NOT EXISTS has_ingredient (" +
+                        "recipe_id BIGINT REFERENCES recipe(recipe_id), " +
+                        "ingredient_id BIGINT REFERENCES ingredient(ingredient_id), " +
+                        "PRIMARY KEY (recipe_id, ingredient_id)" +
                         ")"
         };
 
@@ -151,6 +148,7 @@ public class DatabaseServiceImpl implements DatabaseService {
             jdbcTemplate.execute(sql);
         }
     }
+
 
 
 
