@@ -6,49 +6,32 @@ import io.sustc.dto.RecipeRecord;
 import io.sustc.service.DatabaseService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.util.*;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.List;
+import java.util.*;
+import java.util.stream.Collectors;
 
-/**
- * It's important to mark your implementation class with {@link Service} annotation.
- * As long as the class is annotated and implements the corresponding interface, you can place it under any package.
- */
 @Service
 @Slf4j
 public class DatabaseServiceImpl implements DatabaseService {
 
-    /**
-     * Getting a {@link DataSource} instance from the framework, whose connections are managed by HikariCP.
-     * <p>
-     * Marking a field with {@link Autowired} annotation enables our framework to automatically
-     * provide you a well-configured instance of {@link DataSource}.
-     * Learn more: <a href="https://www.baeldung.com/spring-dependency-injection">Dependency Injection</a>
-     */
     @Autowired
     private DataSource dataSource;
 
-    @Override
-    public List<Integer> getGroupMembers() {
-        //TODO: replace this with your own student IDs in your group
-        return Arrays.asList(12210000, 12210001, 12210002);
-    }
-
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Override
+    public List<Integer> getGroupMembers() {
+        return Arrays.asList(12410303);
+    }
 
     @Override
     @Transactional
@@ -57,114 +40,219 @@ public class DatabaseServiceImpl implements DatabaseService {
             List<UserRecord> userRecords,
             List<RecipeRecord> recipeRecords) {
 
-        // ddl to create tables.
-        createTables();
+        createBasicTables();
 
-        // TODO: implement your import logic
+        String userSql = "INSERT INTO users (author_id, author_name, gender, age, following, followers, password) VALUES ";
+        executeBulkInsert(userSql, 7, userRecords, (u) -> new Object[]{
+                u.getAuthorId(), u.getAuthorName(), u.getGender(), u.getAge(), u.getFollowing(), u.getFollowers(), u.getPassword()
+        });
 
+        // --- Follows ---
+        List<Object[]> followArgs = userRecords.parallelStream()
+                .filter(u -> u.getFollowingUsers() != null && u.getFollowingUsers().length > 0)
+                .flatMap(u -> {
+                    long followerId = u.getAuthorId();
+                    return Arrays.stream(u.getFollowingUsers())
+                            .distinct() // 去重
+                            .mapToObj(bloggerId -> new Object[]{bloggerId, followerId});
+                })
+                .collect(Collectors.toList());
+
+        executeBulkInsert("INSERT INTO follows (blogger_id, follower_id) VALUES ", 2, followArgs, x -> x);
+
+        // --- Recipe ---
+        String recipeSql = "INSERT INTO recipe (recipe_id, author_id, dish_name, date_published, cook_time, prep_time, description, category, aggr_rating, review_cnt, recipe_yield, servings, calories, fat, saturated_fat, cholesterol, sodium, carbohydrate, fiber, sugar, protein) VALUES ";
+        executeBulkInsert(recipeSql, 21, recipeRecords, (r) -> new Object[]{
+                r.getRecipeId(), r.getAuthorId(), r.getName(), r.getDatePublished(), r.getCookTime(), r.getPrepTime(), r.getDescription(), r.getRecipeCategory(), r.getAggregatedRating(), r.getReviewCount(), r.getRecipeYield(), r.getRecipeServings(), r.getCalories(), r.getFatContent(), r.getSaturatedFatContent(), r.getCholesterolContent(), r.getSodiumContent(), r.getCarbohydrateContent(), r.getFiberContent(), r.getSugarContent(), r.getProteinContent()
+        });
+
+        // --- Ingredients ---
+        Set<String> uniqueIngredientNames = recipeRecords.parallelStream()
+                .filter(r -> r.getRecipeIngredientParts() != null)
+                .flatMap(r -> Arrays.stream(r.getRecipeIngredientParts())) // 使用 Arrays.stream() 处理数组
+                .collect(Collectors.toSet());
+
+        List<String> sortedIngredients = new ArrayList<>(uniqueIngredientNames);
+        executeBulkInsert("INSERT INTO ingredient (ingredient_name) VALUES ", 1, sortedIngredients, (name) -> new Object[]{name});
+
+        Map<String, Long> ingredientMap = new HashMap<>(uniqueIngredientNames.size());
+        jdbcTemplate.query("SELECT ingredient_id, ingredient_name FROM ingredient", (rs) -> {
+            ingredientMap.put(rs.getString("ingredient_name"), rs.getLong("ingredient_id"));
+        });
+
+        // --- Has_Ingredient ---
+        List<Object[]> recipeIngRelations = recipeRecords.parallelStream()
+                .filter(r -> r.getRecipeIngredientParts() != null && r.getRecipeIngredientParts().length > 0) // 数组没有 isEmpty()，用 length > 0
+                .flatMap(r -> {
+                    long rid = r.getRecipeId();
+                    Set<String> parts = new HashSet<>();
+                    Collections.addAll(parts, r.getRecipeIngredientParts()); // 将数组添加到 Set 进行去重
+
+                    return parts.stream()
+                            .map(ingredientMap::get)
+                            .filter(Objects::nonNull)
+                            .map(ingId -> new Object[]{rid, ingId});
+                })
+                .collect(Collectors.toList());
+
+        executeBulkInsert("INSERT INTO has_ingredient (recipe_id, ingredient_id) VALUES ", 2, recipeIngRelations, x -> x);
+
+        // --- Reviews ---
+        String reviewSql = "INSERT INTO review (review_id, recipe_id, author_id, rating, review, date_submitted, date_modified) VALUES ";
+        executeBulkInsert(reviewSql, 7, reviewRecords, (rr) -> new Object[]{
+                rr.getReviewId(), rr.getRecipeId(), rr.getAuthorId(), rr.getRating(), rr.getReview(), rr.getDateSubmitted(), rr.getDateModified()
+        });
+
+        // --- Review Likes ---
+        List<Object[]> likeRelations = reviewRecords.parallelStream()
+                .filter(rr -> rr.getLikes() != null && rr.getLikes().length > 0)
+                .flatMap(rr -> {
+                    long rid = rr.getReviewId();
+                    return Arrays.stream(rr.getLikes())
+                            .distinct()
+                            .mapToObj(uid -> new Object[]{uid, rid});
+                })
+                .collect(Collectors.toList());
+
+        executeBulkInsert("INSERT INTO likes_review (author_id, review_id) VALUES ", 2, likeRelations, x -> x);
+
+        addConstraints();
     }
 
+    private <T> void executeBulkInsert(String sqlPrefix, int numParamsPerRecord, List<T> records, RowMapper<T> mapper) {
+        if (records == null || records.isEmpty()) return;
 
-    private void createTables() {
-        String[] createTableSQLs = {
+        int batchSize = Math.max(1, 30000 / numParamsPerRecord);
 
-                // users 表
-                "CREATE TABLE IF NOT EXISTS users (" +
-                        "author_id BIGSERIAL PRIMARY KEY, " +
-                        "author_name VARCHAR(100) NOT NULL, " +
-                        "gender VARCHAR(10) CHECK (gender IN ('Male','Female','UNKNOWN')), " +
-                        "age INT, " +
-                        "following INT DEFAULT 0, " +
-                        "followers INT DEFAULT 0, " +
-                        "password VARCHAR(255) NOT NULL, " +
-                        "is_deleted BOOLEAN NOT NULL DEFAULT FALSE" +
-                        ")",
+        int total = records.size();
+        for (int i = 0; i < total; i += batchSize) {
+            int end = Math.min(i + batchSize, total);
+            List<T> batch = records.subList(i, end);
 
-                // follows 表（用户关注关系）
-                "CREATE TABLE IF NOT EXISTS follows (" +
-                        "blogger_id BIGINT REFERENCES users(author_id), " +
-                        "follower_id BIGINT REFERENCES users(author_id), " +
-                        "PRIMARY KEY (blogger_id, follower_id)" +
-                        ")",
+            StringBuilder sql = new StringBuilder(sqlPrefix);
+            String placeholders = "(" + String.join(",", Collections.nCopies(numParamsPerRecord, "?")) + ")";
+            sql.append(String.join(",", Collections.nCopies(batch.size(), placeholders)));
 
-                // recipe 表
-                "CREATE TABLE IF NOT EXISTS recipe (" +
-                        "recipe_id BIGSERIAL PRIMARY KEY, " +
-                        "author_id BIGINT REFERENCES users(author_id), " +
-                        "dish_name VARCHAR(150) NOT NULL, " +
-                        "date_published TIMESTAMP, " +
-                        "cook_time VARCHAR(50), " +
-                        "prep_time VARCHAR(50), " +
-                        "description TEXT, " +
-                        "category VARCHAR(100), " +
-                        "aggr_rating REAL CHECK (aggr_rating >= 0 AND aggr_rating <= 5), " +
-                        "review_cnt INT DEFAULT 0, " +
-                        "recipe_yield VARCHAR(50), " +
-                        "servings INT, " +
-                        "calories REAL, " +
-                        "fat REAL, " +
-                        "saturated_fat REAL, " +
-                        "cholesterol REAL, " +
-                        "sodium REAL, " +
-                        "carbohydrate REAL, " +
-                        "fiber REAL, " +
-                        "sugar REAL, " +
-                        "protein REAL" +
-                        ")",
-
-                // review 表
-                "CREATE TABLE IF NOT EXISTS review (" +
-                        "review_id BIGSERIAL PRIMARY KEY, " +
-                        "recipe_id BIGINT REFERENCES recipe(recipe_id), " +
-                        "author_id BIGINT REFERENCES users(author_id), " +
-                        "rating REAL, " +
-                        "review TEXT, " +
-                        "date_submitted TIMESTAMP, " +
-                        "date_modified TIMESTAMP" +
-                        ")",
-
-                // likes_review 表（评论点赞）
-                "CREATE TABLE IF NOT EXISTS likes_review (" +
-                        "author_id BIGINT REFERENCES users(author_id), " +
-                        "review_id BIGINT REFERENCES review(review_id), " +
-                        "PRIMARY KEY (author_id, review_id)" +
-                        ")",
-
-                // ingredient 表
-                "CREATE TABLE IF NOT EXISTS ingredient (" +
-                        "ingredient_id BIGSERIAL PRIMARY KEY, " +
-                        "ingredient_name VARCHAR(100) UNIQUE NOT NULL" +
-                        ")",
-
-                // has_ingredient 表（菜谱-配料）
-                "CREATE TABLE IF NOT EXISTS has_ingredient (" +
-                        "recipe_id BIGINT REFERENCES recipe(recipe_id), " +
-                        "ingredient_id BIGINT REFERENCES ingredient(ingredient_id), " +
-                        "PRIMARY KEY (recipe_id, ingredient_id)" +
-                        ")"
-        };
-
-        for (String sql : createTableSQLs) {
-            jdbcTemplate.execute(sql);
+            jdbcTemplate.update(sql.toString(), ps -> {
+                int paramIndex = 1;
+                for (T record : batch) {
+                    Object[] args = mapper.map(record);
+                    for (Object arg : args) {
+                        ps.setObject(paramIndex++, arg);
+                    }
+                }
+            });
         }
     }
 
+    private interface RowMapper<T> {
+        Object[] map(T t);
+    }
 
+    private void createBasicTables() {
+        // 注意：这里没有任何 PRIMARY KEY 定义，只有最纯粹的数据列
+        String sql = """
+            CREATE TABLE IF NOT EXISTS users (
+                    author_id      BIGINT, -- 稍后添加 PK
+                    author_name    VARCHAR(255) NOT NULL,
+                    gender         VARCHAR(10),
+                    age            INT,
+                    following      INT,
+                    followers      INT,
+                    password       VARCHAR(255) NOT NULL,
+                    is_deleted     BOOLEAN NOT NULL DEFAULT FALSE
+            );
+            CREATE TABLE IF NOT EXISTS follows (
+                    blogger_id  BIGINT,
+                    follower_id BIGINT
+            );
+            CREATE TABLE IF NOT EXISTS recipe (
+                    recipe_id       BIGINT, -- 稍后添加 PK
+                    author_id       BIGINT,
+                    dish_name       VARCHAR(255) NOT NULL,
+                    date_published  TIMESTAMP,
+                    cook_time       VARCHAR(50),
+                    prep_time       VARCHAR(50),
+                    description     TEXT,
+                    category        VARCHAR(100),
+                    aggr_rating     REAL,
+                    review_cnt      INT,
+                    recipe_yield    VARCHAR(50),
+                    servings        INT,
+                    calories        REAL,
+                    fat             REAL,
+                    saturated_fat   REAL,
+                    cholesterol     REAL,
+                    sodium          REAL,
+                    carbohydrate    REAL,
+                    fiber           REAL,
+                    sugar           REAL,
+                    protein         REAL
+            );
+            CREATE TABLE IF NOT EXISTS review (
+                    review_id        BIGINT, -- 稍后添加 PK
+                    recipe_id        BIGINT,
+                    author_id        BIGINT,
+                    rating           REAL,
+                    review           TEXT,
+                    date_submitted   TIMESTAMP,
+                    date_modified    TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS likes_review (
+                    author_id BIGINT,
+                    review_id BIGINT
+            );
+            CREATE TABLE IF NOT EXISTS ingredient (
+                    ingredient_id   BIGSERIAL,
+                    ingredient_name VARCHAR(255) NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS has_ingredient (
+                    recipe_id    BIGINT,
+                    ingredient_id BIGINT
+            );
+        """;
+        jdbcTemplate.execute(sql);
+    }
 
+    private void addConstraints() {
+        String sql = """
+            -- Users
+            ALTER TABLE users ADD PRIMARY KEY (author_id);
+            ALTER TABLE users ADD CONSTRAINT chk_users_gender CHECK (gender IN ('Male','Female','UNKNOWN'));
 
-    /*
-     * The following code is just a quick example of using jdbc datasource.
-     * Practically, the code interacts with database is usually written in a DAO layer.
-     *
-     * Reference: [Data Access Object pattern](https://www.baeldung.com/java-dao-pattern)
-     */
+            -- Follows
+            ALTER TABLE follows ADD PRIMARY KEY (blogger_id, follower_id);
+            ALTER TABLE follows ADD CONSTRAINT fk_follows_blogger FOREIGN KEY (blogger_id) REFERENCES users(author_id);
+            ALTER TABLE follows ADD CONSTRAINT fk_follows_follower FOREIGN KEY (follower_id) REFERENCES users(author_id);
+
+            -- Recipe
+            ALTER TABLE recipe ADD PRIMARY KEY (recipe_id);
+            ALTER TABLE recipe ADD CONSTRAINT fk_recipe_author FOREIGN KEY (author_id) REFERENCES users(author_id);
+
+            -- Ingredient
+            ALTER TABLE ingredient ADD PRIMARY KEY (ingredient_id);
+            ALTER TABLE ingredient ADD CONSTRAINT uq_ingredient_name UNIQUE (ingredient_name);
+
+            -- Has Ingredient
+            ALTER TABLE has_ingredient ADD PRIMARY KEY (recipe_id, ingredient_id);
+            ALTER TABLE has_ingredient ADD CONSTRAINT fk_has_recipe FOREIGN KEY (recipe_id) REFERENCES recipe(recipe_id);
+            ALTER TABLE has_ingredient ADD CONSTRAINT fk_has_ingredient FOREIGN KEY (ingredient_id) REFERENCES ingredient(ingredient_id);
+
+            -- Review
+            ALTER TABLE review ADD PRIMARY KEY (review_id);
+            ALTER TABLE review ADD CONSTRAINT fk_review_recipe FOREIGN KEY (recipe_id) REFERENCES recipe(recipe_id);
+            ALTER TABLE review ADD CONSTRAINT fk_review_author FOREIGN KEY (author_id) REFERENCES users(author_id);
+
+            -- Likes Review
+            ALTER TABLE likes_review ADD PRIMARY KEY (author_id, review_id);
+            ALTER TABLE likes_review ADD CONSTRAINT fk_likes_author FOREIGN KEY (author_id) REFERENCES users(author_id);
+            ALTER TABLE likes_review ADD CONSTRAINT fk_likes_review FOREIGN KEY (review_id) REFERENCES review(review_id);
+        """;
+        jdbcTemplate.execute(sql);
+    }
 
     @Override
     public void drop() {
-        // You can use the default drop script provided by us in most cases,
-        // but if it doesn't work properly, you may need to modify it.
-        // This method will delete all the tables in the public schema.
-
         String sql = "DO $$\n" +
                 "DECLARE\n" +
                 "    tables CURSOR FOR\n" +
@@ -189,13 +277,10 @@ public class DatabaseServiceImpl implements DatabaseService {
     @Override
     public Integer sum(int a, int b) {
         String sql = "SELECT ?+?";
-
         try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setInt(1, a);
             stmt.setInt(2, b);
-            log.info("SQL: {}", stmt);
-
             ResultSet rs = stmt.executeQuery();
             rs.next();
             return rs.getInt(1);
