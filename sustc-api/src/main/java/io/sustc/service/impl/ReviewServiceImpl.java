@@ -8,7 +8,6 @@ import io.sustc.service.ReviewService;
 import io.sustc.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -186,8 +185,19 @@ public class ReviewServiceImpl implements ReviewService {
 
         sql.append(" LIMIT ? OFFSET ? ");
 
-        List<ReviewRecord> list = jdbcTemplate.query(sql.toString(), new BeanPropertyRowMapper<>(ReviewRecord.class), 
-                recipeId, size, (page - 1) * size);
+        List<ReviewRecord> list = jdbcTemplate.query(sql.toString(), (rs, rowNum) -> {
+            ReviewRecord r = new ReviewRecord();
+            r.setReviewId(rs.getLong("review_id"));
+            r.setRecipeId(rs.getLong("recipe_id"));
+            r.setAuthorId(rs.getLong("author_id"));
+            r.setAuthorName(rs.getString("author_name"));
+            r.setRating(rs.getFloat("rating"));
+            r.setReview(rs.getString("review"));
+            r.setDateSubmitted(rs.getTimestamp("date_submitted"));
+            r.setDateModified(rs.getTimestamp("date_modified"));
+            r.setLikes(new long[0]); 
+            return r;
+        }, recipeId, size, (page - 1) * size);
 
         Long total = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM review WHERE recipe_id = ?", Long.class, recipeId);
 
@@ -209,6 +219,7 @@ public class ReviewServiceImpl implements ReviewService {
              throw new IllegalArgumentException("Recipe does not exist");
          }
 
+         // Use NUMERIC in DB to ensure exact rounding matching expected results
          String updateSql = """
                  UPDATE recipe 
                  SET aggr_rating = ROUND(CAST((SELECT AVG(rating) FROM review WHERE recipe_id = ?) AS numeric), 2), 

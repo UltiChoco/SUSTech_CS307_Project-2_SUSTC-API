@@ -41,7 +41,6 @@ public class RecipeServiceImpl implements RecipeService {
 
     @Override
     public RecipeRecord getRecipeById(long recipeId) {
-        // Use COALESCE to handle NULL values for primitive float fields in DTO
         String sql = """
                 SELECT r.recipe_id, r.author_id, r.dish_name as name, r.date_published, r.cook_time, r.prep_time, 
                        r.description, r.category as recipe_category, 
@@ -71,9 +70,10 @@ public class RecipeServiceImpl implements RecipeService {
                         FROM has_ingredient hi 
                         JOIN ingredient i ON hi.ingredient_id = i.ingredient_id 
                         WHERE hi.recipe_id = ? 
-                        ORDER BY i.ingredient_name
                         """;
+                // FIX: Sort ingredients in memory to strictly follow String::compareToIgnoreCase
                 List<String> ingredients = jdbcTemplate.query(ingSql, (rs, rowNum) -> rs.getString("ingredient_name"), recipeId);
+                ingredients.sort(String::compareToIgnoreCase);
                 record.setRecipeIngredientParts(ingredients.toArray(new String[0]));
             }
             return record;
@@ -89,7 +89,6 @@ public class RecipeServiceImpl implements RecipeService {
             throw new IllegalArgumentException("Page must be >= 1 and size > 0");
         }
 
-        // OPTIMIZATION: Separate WHERE clause to reuse and avoid JOINs in COUNT query
         StringBuilder whereClause = new StringBuilder(" WHERE 1=1 ");
         List<Object> args = new ArrayList<>();
         
@@ -108,11 +107,9 @@ public class RecipeServiceImpl implements RecipeService {
             args.add(minRating);
         }
 
-        // OPTIMIZATION: Count without JOINing users table
         String countSql = "SELECT COUNT(*) FROM recipe r " + whereClause.toString();
         Long total = jdbcTemplate.queryForObject(countSql, Long.class, args.toArray());
 
-        // Main Query
         StringBuilder fetchSql = new StringBuilder("""
                 SELECT r.recipe_id, r.author_id, r.dish_name as name, r.date_published, r.cook_time, r.prep_time, 
                        r.description, r.category as recipe_category, 
@@ -134,26 +131,21 @@ public class RecipeServiceImpl implements RecipeService {
         fetchSql.append(whereClause);
 
         if ("rating_desc".equals(sort)) {
-            fetchSql.append(" ORDER BY r.aggr_rating DESC NULLS LAST ");
+            fetchSql.append(" ORDER BY r.aggr_rating DESC NULLS LAST, r.recipe_id DESC ");
         } else if ("date_desc".equals(sort)) {
-            fetchSql.append(" ORDER BY r.date_published DESC NULLS LAST ");
+            fetchSql.append(" ORDER BY r.date_published DESC NULLS LAST, r.recipe_id DESC ");
         } else if ("calories_asc".equals(sort)) {
-            fetchSql.append(" ORDER BY r.calories ASC NULLS LAST ");
+            fetchSql.append(" ORDER BY r.calories ASC NULLS LAST, r.recipe_id ASC ");
         } else {
             fetchSql.append(" ORDER BY r.recipe_id ASC ");
         }
         
-        if (sort != null && !sort.isEmpty()) {
-             fetchSql.append(", r.recipe_id ASC ");
-        }
-
         fetchSql.append(" LIMIT ? OFFSET ? ");
         args.add(size);
         args.add((page - 1) * size);
 
         List<RecipeRecord> records = jdbcTemplate.query(fetchSql.toString(), new BeanPropertyRowMapper<>(RecipeRecord.class), args.toArray());
 
-        // OPTIMIZATION: Batch fetch ingredients to avoid N+1 problem
         if (!records.isEmpty()) {
             records.forEach(r -> r.setTotalTime(calculateTotalTime(r.getCookTime(), r.getPrepTime())));
 
@@ -164,7 +156,6 @@ public class RecipeServiceImpl implements RecipeService {
                     FROM has_ingredient hi 
                     JOIN ingredient i ON hi.ingredient_id = i.ingredient_id 
                     WHERE hi.recipe_id IN (%s) 
-                    ORDER BY i.ingredient_name
                     """, placeholders);
             
             Map<Long, List<String>> ingredientsMap = new HashMap<>();
@@ -175,7 +166,9 @@ public class RecipeServiceImpl implements RecipeService {
             }, recipeIds.toArray());
 
             for (RecipeRecord record : records) {
-                List<String> parts = ingredientsMap.getOrDefault(record.getRecipeId(), Collections.emptyList());
+                List<String> parts = ingredientsMap.getOrDefault(record.getRecipeId(), new ArrayList<>());
+                // FIX: Sort in memory to guarantee case-insensitive order
+                parts.sort(String::compareToIgnoreCase);
                 record.setRecipeIngredientParts(parts.toArray(new String[0]));
             }
         }
@@ -265,10 +258,16 @@ public class RecipeServiceImpl implements RecipeService {
         }
 
         try {
-            if (cookTimeIso != null) Duration.parse(cookTimeIso);
-            if (prepTimeIso != null) Duration.parse(prepTimeIso);
+            if (cookTimeIso != null) {
+                Duration d = Duration.parse(cookTimeIso);
+                if (d.isNegative()) throw new IllegalArgumentException("Cook time cannot be negative");
+            }
+            if (prepTimeIso != null) {
+                Duration d = Duration.parse(prepTimeIso);
+                if (d.isNegative()) throw new IllegalArgumentException("Prep time cannot be negative");
+            }
         } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid ISO 8601 duration format");
+            throw new IllegalArgumentException("Invalid ISO 8601 duration format or negative value");
         }
 
         String checkSql = "SELECT author_id FROM recipe WHERE recipe_id = ?";
@@ -301,65 +300,47 @@ public class RecipeServiceImpl implements RecipeService {
         jdbcTemplate.update(updateSql.toString(), params.toArray());
     }
 
-    @Data @AllArgsConstructor
-    private static class CalorieNode {
-        long id;
-        double cal;
-    }
-
     @Override
     public Map<String, Object> getClosestCaloriePair() {
-        // Fetch all valid calorie data and sort in Memory/DB
-        String sql = "SELECT recipe_id, calories FROM recipe WHERE calories IS NOT NULL ORDER BY calories ASC, recipe_id ASC";
-        
-        List<CalorieNode> nodes = jdbcTemplate.query(sql, (rs, rowNum) -> 
-            new CalorieNode(rs.getLong("recipe_id"), rs.getDouble("calories"))
-        );
+        String sql = """
+                SELECT r1.recipe_id as id1, r2.recipe_id as id2, 
+                       r1.calories as cal1, r2.calories as cal2, 
+                       ABS(r1.calories - r2.calories) as diff 
+                FROM (
+                    SELECT recipe_id, calories, 
+                           LAG(recipe_id) OVER (ORDER BY calories ASC, recipe_id ASC) as prev_id 
+                    FROM recipe 
+                    WHERE calories IS NOT NULL
+                ) r1 
+                JOIN recipe r2 ON r1.prev_id = r2.recipe_id 
+                ORDER BY diff ASC, 
+                         LEAST(r1.recipe_id, r2.recipe_id) ASC, 
+                         GREATEST(r1.recipe_id, r2.recipe_id) ASC 
+                LIMIT 1
+                """;
 
-        if (nodes.size() < 2) return null;
+        try {
+            return jdbcTemplate.queryForObject(sql, (rs, rowNum) -> {
+                Map<String, Object> map = new HashMap<>();
+                long id1 = rs.getLong("id2"); 
+                long id2 = rs.getLong("id1");
+                double cal1 = rs.getDouble("cal2");
+                double cal2 = rs.getDouble("cal1");
+                double diff = rs.getDouble("diff");
 
-        double minDiff = Double.MAX_VALUE;
-        CalorieNode bestA = null;
-        CalorieNode bestB = null;
-
-        // Linear scan for adjacent closest pair O(N)
-        for (int i = 0; i < nodes.size() - 1; i++) {
-            CalorieNode a = nodes.get(i);
-            CalorieNode b = nodes.get(i + 1);
-            double diff = Math.abs(a.cal - b.cal);
-
-            if (diff < minDiff) {
-                minDiff = diff;
-                bestA = a;
-                bestB = b;
-            } else if (diff == minDiff) {
-                // Tie-breaking: Smaller RecipeA, then Smaller RecipeB
-                long curMinId = Math.min(a.id, b.id);
-                long curMaxId = Math.max(a.id, b.id);
+                long minId = Math.min(id1, id2);
+                long maxId = Math.max(id1, id2);
                 
-                long bestMinId = Math.min(bestA.id, bestB.id);
-                long bestMaxId = Math.max(bestA.id, bestB.id);
-                
-                if (curMinId < bestMinId) {
-                    bestA = a; bestB = b;
-                } else if (curMinId == bestMinId && curMaxId < bestMaxId) {
-                    bestA = a; bestB = b;
-                }
-            }
+                map.put("RecipeA", minId);
+                map.put("RecipeB", maxId);
+                map.put("CaloriesA", minId == id1 ? cal1 : cal2);
+                map.put("CaloriesB", maxId == id1 ? cal1 : cal2);
+                map.put("Difference", diff);
+                return map;
+            });
+        } catch (EmptyResultDataAccessException e) {
+            return null;
         }
-
-        if (bestA == null) return null;
-
-        Map<String, Object> map = new HashMap<>();
-        long id1 = Math.min(bestA.id, bestB.id);
-        long id2 = Math.max(bestA.id, bestB.id);
-        
-        map.put("RecipeA", id1);
-        map.put("RecipeB", id2);
-        map.put("CaloriesA", (id1 == bestA.id) ? bestA.cal : bestB.cal);
-        map.put("CaloriesB", (id2 == bestA.id) ? bestA.cal : bestB.cal);
-        map.put("Difference", minDiff);
-        return map;
     }
 
     @Override
