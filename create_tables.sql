@@ -67,3 +67,34 @@ CREATE TABLE has_ingredient (
                                 ingredient_id BIGINT REFERENCES ingredient(ingredient_id),
                                 PRIMARY KEY (recipe_id, ingredient_id)
 );
+
+-- 1) 创建应用连接用户 sustc（若已存在则不重复创建）
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sustc') THEN
+CREATE ROLE sustc LOGIN PASSWORD 'sustec';
+END IF;
+END $$;
+
+-- 2) 允许连接数据库
+GRANT CONNECT ON DATABASE sustc TO sustc;
+
+-- 3) 允许使用 schema（默认 public）
+GRANT USAGE ON SCHEMA public TO sustc;
+
+-- 4) 对当前已有的表授予 DML 权限（读写）
+GRANT SELECT, INSERT, UPDATE, DELETE
+      ON ALL TABLES IN SCHEMA public
+          TO sustc;
+
+-- 5) BIGSERIAL 会生成 sequence；插入时需要 sequence 权限
+GRANT USAGE, SELECT
+             ON ALL SEQUENCES IN SCHEMA public
+                 TO sustc;
+
+-- 6) 未来新建表/序列时自动赋权
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO sustc;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT USAGE, SELECT ON SEQUENCES TO sustc;
