@@ -30,7 +30,7 @@ public class DatabaseServiceImpl implements DatabaseService {
 
     @Override
     public List<Integer> getGroupMembers() {
-        return Arrays.asList(12410303);
+        return Arrays.asList(12410303, 12410148);
     }
 
     @Override
@@ -185,7 +185,8 @@ public class DatabaseServiceImpl implements DatabaseService {
                     cholesterol     REAL,
                     sodium          REAL,
                     carbohydrate    REAL,
-                    fiber           REAL,
+                    fiber           REAL,sysdm.cpl
+                                         
                     sugar           REAL,
                     protein         REAL
             );
