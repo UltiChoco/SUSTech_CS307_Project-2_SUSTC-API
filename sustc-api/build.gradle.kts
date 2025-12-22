@@ -12,22 +12,22 @@ plugins {
 
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
-    // 添加OpenCSV依赖
+    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.postgresql:postgresql")
     implementation("com.opencsv:opencsv:5.7.1")
-
     implementation("org.furyio:fury-core:0.3.1")
-
-    // You may add any utility library you want to use, such as guava.
-    // ORM libraries are prohibited in this project.
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
+
 
 tasks.withType<BootRun> {
     enabled = false
 }
 
-tasks.withType<BootJar> {
-    enabled = false
-}
+
+ tasks.withType<BootJar> {
+     enabled = false
+ }
 
 tasks.register("submitJar") {
     group = "application"
@@ -37,7 +37,7 @@ tasks.register("submitJar") {
         archiveFileName = "sustc-api.jar"
         destinationDirectory = File("$rootDir/submit")
         dependencies {
-            exclude(dependency("ch.qos.logback:logback-.*"))
+            exclude(dependency("ch.qos.logback:logback-.* "))
         }
     }.let { dependsOn(it) }
 }
