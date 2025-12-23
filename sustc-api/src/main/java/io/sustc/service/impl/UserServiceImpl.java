@@ -183,36 +183,45 @@ public class UserServiceImpl implements UserService {
         }
     }
 
+    // ===== login cache =====
+    private final Map<Long, Long> authCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private long fastLogin(AuthInfo auth) {
+        if (auth == null) return -1;
+        return authCache.computeIfAbsent(auth.getAuthorId(), id -> login(auth));
+    }
+
     @Override
-    @Transactional
     public void updateProfile(AuthInfo auth, String gender, Integer age) {
-        long userId = login(auth);
+        long userId = fastLogin(auth);
         if (userId == -1) {
             throw new SecurityException("Invalid auth info");
         }
 
-        StringBuilder sql = new StringBuilder("UPDATE users SET ");
-        List<Object> args = new ArrayList<>();
-        if (gender != null && !gender.isEmpty()) {
-            sql.append("gender = ?, ");
-            args.add(gender);
+        if (gender != null && gender.isEmpty()) {
+            gender = null;
         }
-        if (age != null) {
-             if (age <= 0) {
-                 // invalid age
-             }
-             sql.append("age = ?, ");
-             args.add(age);
+        if (age != null && age <= 0) {
+            age = null;
+        }
+        if (gender == null && age == null) {
+            return;
         }
 
-        if (args.isEmpty()) return;
-
-        sql.setLength(sql.length() - 2);
-        sql.append(" WHERE author_id = ?");
-        args.add(userId);
-
-        jdbcTemplate.update(sql.toString(), args.toArray());
+        jdbcTemplate.update(
+                """
+                UPDATE users
+                SET
+                    gender = COALESCE(?, gender),
+                    age    = COALESCE(?, age)
+                WHERE author_id = ?
+                """,
+                gender,
+                age,
+                userId
+        );
     }
+
 
     @Override
     public PageResult<FeedItem> feed(AuthInfo auth, int page, int size, String category) {

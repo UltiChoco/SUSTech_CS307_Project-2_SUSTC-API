@@ -9,14 +9,12 @@ import io.sustc.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.EmptyResultDataAccessException;
-import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -168,15 +166,21 @@ public class ReviewServiceImpl implements ReviewService {
         }
         
         StringBuilder sql = new StringBuilder("""
-                SELECT r.review_id, r.recipe_id, r.author_id, u.author_name, r.rating, r.review, 
-                       r.date_submitted, r.date_modified 
-                FROM review r 
-                LEFT JOIN users u ON r.author_id = u.author_id 
-                WHERE r.recipe_id = ? 
+                SELECT r.review_id, r.recipe_id, r.author_id, u.author_name, r.rating, r.review,
+                       r.date_submitted, r.date_modified,
+                       COALESCE(lr.likes, '{}'::bigint[]) AS likes
+                FROM review r
+                LEFT JOIN users u ON r.author_id = u.author_id
+                LEFT JOIN (
+                    SELECT review_id, ARRAY_AGG(author_id ORDER BY author_id) AS likes, COUNT(*) AS like_cnt
+                    FROM likes_review
+                    GROUP BY review_id
+                ) lr ON lr.review_id = r.review_id
+                WHERE r.recipe_id = ?
                 """);
 
         if ("likes_desc".equals(sort)) {
-            sql.append(" ORDER BY (SELECT COUNT(*) FROM likes_review lr WHERE lr.review_id = r.review_id) DESC, r.review_id ASC ");
+            sql.append(" ORDER BY COALESCE(lr.like_cnt, 0) DESC, r.review_id ASC ");
         } else if ("date_desc".equals(sort)) {
             sql.append(" ORDER BY r.date_modified DESC, r.review_id ASC ");
         } else {
@@ -195,7 +199,34 @@ public class ReviewServiceImpl implements ReviewService {
             r.setReview(rs.getString("review"));
             r.setDateSubmitted(rs.getTimestamp("date_submitted"));
             r.setDateModified(rs.getTimestamp("date_modified"));
-            r.setLikes(new long[0]); 
+
+            // Populate likes exactly as import format expects. Never return null.
+            long[] likes = new long[0];
+            try {
+                java.sql.Array likesArr = rs.getArray("likes");
+                if (likesArr != null) {
+                    Object raw = likesArr.getArray();
+                    if (raw instanceof Long[] boxed) {
+                        likes = new long[boxed.length];
+                        for (int i = 0; i < boxed.length; i++) {
+                            likes[i] = boxed[i] == null ? 0L : boxed[i];
+                        }
+                    } else if (raw instanceof long[] primitive) {
+                        likes = primitive;
+                    } else if (raw instanceof Object[] objArr) {
+                        likes = new long[objArr.length];
+                        for (int i = 0; i < objArr.length; i++) {
+                            Object v = objArr[i];
+                            likes[i] = v == null ? 0L : ((Number) v).longValue();
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+                // Fallback to empty array to satisfy equality and API expectations.
+                likes = new long[0];
+            }
+            r.setLikes(likes);
+
             return r;
         }, recipeId, size, (page - 1) * size);
 

@@ -10,6 +10,12 @@ plugins {
     alias(libs.plugins.shadow)
 }
 
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(20))
+    }
+}
+
 dependencies {
     implementation("org.springframework.boot:spring-boot-starter-jdbc")
     // 添加OpenCSV依赖
