@@ -22,12 +22,47 @@ import java.util.Locale;
 import java.util.Calendar;
 import java.util.TimeZone;
 
+import java.util.concurrent.atomic.AtomicLong;
+import java.time.format.DateTimeFormatter;
+
 @Service
 @Slf4j
 public class UserServiceImpl implements UserService {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    // ===== login cache =====
+    // Use (authorId,password) as cache key and never cache failed logins.
+    private final Map<String, Long> authCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private long fastLogin(AuthInfo auth) {
+        if (auth == null) return -1;
+        if (auth.getPassword() == null || auth.getPassword().isEmpty()) return -1;
+        String key = auth.getAuthorId() + ":" + auth.getPassword();
+        Long cached = authCache.get(key);
+        if (cached != null && cached != -1) {
+            return cached;
+        }
+        long res = login(auth);
+        if (res != -1) {
+            authCache.put(key, res);
+        }
+        return res;
+    }
+
+    // 1. 将 Formatter 提出来作为静态常量，避免重复创建对象，大幅降低 CPU 开销
+    private static final DateTimeFormatter[] DATE_FORMATTERS = {
+            DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.US),
+            DateTimeFormatter.ofPattern("MM/dd/yyyy", Locale.US),
+            DateTimeFormatter.ofPattern("yyyy/MM/dd", Locale.US),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.US),
+            DateTimeFormatter.ofPattern("MM/dd/yyyy HH:mm:ss", Locale.US)
+    };
+
+    // 2. 使用内存原子计数器生成 ID, 解决并发主键冲突
+    private final AtomicLong idGenerator = new AtomicLong(0);
+    private volatile boolean idInitialized = false;
 
     @Override
     public long register(RegisterUserReq req) {
@@ -37,44 +72,50 @@ public class UserServiceImpl implements UserService {
         if (req.getGender() == null || req.getGender() == RegisterUserReq.Gender.UNKNOWN) {
             return -1;
         }
-        
         if (req.getBirthday() == null || req.getBirthday().isEmpty()) {
             return -1;
         }
-        Integer age = calculateAge(req.getBirthday());
+        Integer age = calculateAgeFast(req.getBirthday());
         if (age == null || age <= 0) {
             return -1;
         }
 
-        Long count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM users WHERE author_name = ?", Long.class, req.getName());
-        if (count != null && count > 0) {
-            return -1;
+        //ID 生成, 懒加载初始化
+        if (!idInitialized) {
+            synchronized (this) {
+                if (!idInitialized) {
+                    Long maxId = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(author_id), 0) FROM users", Long.class);
+                    idGenerator.set(maxId);
+                    idInitialized = true;
+                }
+            }
         }
-
-        Long newId = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(author_id), 0) + 1 FROM users", Long.class);
+        long newId = idGenerator.incrementAndGet();
 
         String genderStr = req.getGender() == RegisterUserReq.Gender.MALE ? "Male" : "Female";
 
-        String sql = "INSERT INTO users (author_id, author_name, gender, age, following, followers, password, is_deleted) VALUES (?, ?, ?, ?, 0, 0, ?, false)";
-        jdbcTemplate.update(sql, newId, req.getName(), genderStr, age, req.getPassword());
+        try {
+            // 4. 直接插入，去掉 SELECT COUNT(*)
+            String sql = "INSERT INTO users (author_id, author_name, gender, age, following, followers, password, is_deleted) VALUES (?, ?, ?, ?, 0, 0, ?, false)";
+            jdbcTemplate.update(sql, newId, req.getName(), genderStr, age, req.getPassword());
 
-        return newId;
+            return newId;
+        } catch (DuplicateKeyException e) {
+            return -1;
+        }
     }
 
-    private Integer calculateAge(String birthday) {
-        String[] patterns = {"yyyy-MM-dd", "MM/dd/yyyy", "yyyy/MM/dd", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss"};
-        for (String pattern : patterns) {
+    private Integer calculateAgeFast(String birthday) {
+        for (DateTimeFormatter formatter : DATE_FORMATTERS) {
             try {
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern(pattern, Locale.US);
                 LocalDate birthDate;
-                if (pattern.contains("HH")) {
-                    birthDate = java.time.LocalDateTime.parse(birthday, formatter).toLocalDate();
-                } else {
+                try {
                     birthDate = LocalDate.parse(birthday, formatter);
+                } catch (Exception e) {
+                    birthDate = java.time.LocalDateTime.parse(birthday, formatter).toLocalDate();
                 }
                 return Period.between(birthDate, LocalDate.now()).getYears();
             } catch (Exception e) {
-                // continue to next pattern
             }
         }
         return null;
@@ -111,33 +152,36 @@ public class UserServiceImpl implements UserService {
             throw new SecurityException("Cannot delete other user's account");
         }
 
-        Boolean isDeleted = jdbcTemplate.queryForObject("SELECT is_deleted FROM users WHERE author_id = ?", Boolean.class, userId);
-        if (Boolean.TRUE.equals(isDeleted)) {
+        int deleted = jdbcTemplate.update(
+                "UPDATE users SET is_deleted = true WHERE author_id = ? AND is_deleted = false",
+                userId
+        );
+        if (deleted == 0) {
             return false;
         }
 
-        jdbcTemplate.update("UPDATE users SET is_deleted = true WHERE author_id = ?", userId);
+        jdbcTemplate.update(
+                "UPDATE users SET followers = followers - 1 WHERE author_id IN " +
+                        "(SELECT blogger_id FROM follows WHERE follower_id = ?)",
+                userId
+        );
 
-        List<Long> followingIds = jdbcTemplate.query("SELECT blogger_id FROM follows WHERE follower_id = ?", (rs, rowNum) -> rs.getLong(1), userId);
-        for (Long targetId : followingIds) {
-            jdbcTemplate.update("UPDATE users SET followers = followers - 1 WHERE author_id = ?", targetId);
-        }
-
-        List<Long> followerIds = jdbcTemplate.query("SELECT follower_id FROM follows WHERE blogger_id = ?", (rs, rowNum) -> rs.getLong(1), userId);
-        for (Long sourceId : followerIds) {
-            jdbcTemplate.update("UPDATE users SET following = following - 1 WHERE author_id = ?", sourceId);
-        }
+        jdbcTemplate.update(
+                "UPDATE users SET following = following - 1 WHERE author_id IN " +
+                        "(SELECT follower_id FROM follows WHERE blogger_id = ?)",
+                userId
+        );
 
         jdbcTemplate.update("DELETE FROM follows WHERE follower_id = ? OR blogger_id = ?", userId, userId);
+
         jdbcTemplate.update("UPDATE users SET following = 0, followers = 0 WHERE author_id = ?", userId);
 
         return true;
     }
 
     @Override
-    @Transactional
     public boolean follow(AuthInfo auth, long followeeId) {
-        long followerId = login(auth);
+        long followerId = fastLogin(auth);
         if (followerId == -1) {
             throw new SecurityException("Invalid auth info");
         }
@@ -145,33 +189,43 @@ public class UserServiceImpl implements UserService {
             throw new SecurityException("Cannot follow yourself");
         }
 
-        try {
-             Boolean isDeleted = jdbcTemplate.queryForObject("SELECT is_deleted FROM users WHERE author_id = ?", Boolean.class, followeeId);
-             if (Boolean.TRUE.equals(isDeleted)) {
-                 // Consider deleted user as 'not exist' or 'security error' for benchmark context
-                 throw new SecurityException("User does not exist or deleted");
-             }
-        } catch (EmptyResultDataAccessException e) {
-             // HACK: Benchmark expects SecurityException when user not found, 
-             // likely grouping 'invalid target' under security/invalid operation.
-             throw new SecurityException("User does not exist");
-        }
-
-        String checkSql = "SELECT COUNT(*) FROM follows WHERE follower_id = ? AND blogger_id = ?";
-        Long count = jdbcTemplate.queryForObject(checkSql, Long.class, followerId, followeeId);
-
-        if (count != null && count > 0) {
-            jdbcTemplate.update("DELETE FROM follows WHERE follower_id = ? AND blogger_id = ?", followerId, followeeId);
-            jdbcTemplate.update("UPDATE users SET following = following - 1 WHERE author_id = ?", followerId);
-            jdbcTemplate.update("UPDATE users SET followers = followers - 1 WHERE author_id = ?", followeeId);
+        // Unfollow 先删
+        int rows = jdbcTemplate.update(
+                "DELETE FROM follows WHERE follower_id = ? AND blogger_id = ?",
+                followerId, followeeId
+        );
+        if (rows > 0) {
+            updateCounters(followerId, followeeId, -1);
             return false;
-        } else {
-            jdbcTemplate.update("INSERT INTO follows (follower_id, blogger_id) VALUES (?, ?)", followerId, followeeId);
-            jdbcTemplate.update("UPDATE users SET following = following + 1 WHERE author_id = ?", followerId);
-            jdbcTemplate.update("UPDATE users SET followers = followers + 1 WHERE author_id = ?", followeeId);
-            return true;
         }
+
+        // Follow (后插)
+        int inserted = jdbcTemplate.update(
+                "INSERT INTO follows (follower_id, blogger_id) " +
+                        "SELECT ?, ? FROM users WHERE author_id = ? AND is_deleted = false",
+                followerId, followeeId, followeeId
+        );
+
+        if (inserted == 0) {
+            throw new SecurityException("User does not exist or deleted");
+        }
+
+        updateCounters(followerId, followeeId, 1);
+        return true;
     }
+
+    // 将两次Update合并为一次DB交互
+    private void updateCounters(long followerId, long followeeId, int delta) {
+        String sql =
+                "UPDATE users SET " +
+                        // 如果是发起者(follower)，更新 following 字段
+                        "  following = following + (CASE WHEN author_id = ? THEN ? ELSE 0 END), " +
+                        // 如果是目标(blogger)，更新 followers 字段
+                        "  followers = followers + (CASE WHEN author_id = ? THEN ? ELSE 0 END) " +
+                        "WHERE author_id IN (?, ?)";
+        jdbcTemplate.update(sql, followerId, delta, followeeId, delta, followerId, followeeId);
+    }
+
 
     @Override
     public UserRecord getById(long userId) {
@@ -181,14 +235,6 @@ public class UserServiceImpl implements UserService {
         } catch (EmptyResultDataAccessException e) {
             return null;
         }
-    }
-
-    // ===== login cache =====
-    private final Map<Long, Long> authCache = new java.util.concurrent.ConcurrentHashMap<>();
-
-    private long fastLogin(AuthInfo auth) {
-        if (auth == null) return -1;
-        return authCache.computeIfAbsent(auth.getAuthorId(), id -> login(auth));
     }
 
     @Override
