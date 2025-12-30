@@ -246,8 +246,58 @@
 
 ### 1. 高级功能实现
 
-*(在此处描述高级API的实现逻辑，例如复杂的查询、推荐算法等)*
+#### 数据库高级对象 (Advanced Objects)
+
+为了提升数据库层面的逻辑复用性与查询效率，在 `DatabaseServiceImpl` 的 `createAdvancedDatabaseObjects` 方法中部署了视图与存储过程：
+
+- **视图 (View) 实现**：
+  - **名称**：`recipe_details_view`
+  - **功能**：预先定义了 `recipe` 表与 `users` 表的 `JOIN` 操作。
+  - **优势**：将复杂的连接逻辑封装在数据库层，简化了后端 Java 代码中复杂查询（如 Feed 流获取）的 SQL 编写，同时便于数据库优化器生成更优的执行计划。
+
+- **存储过程 (Stored Procedure) 实现**：
+  - **名称**：`count_user_recipes(u_id)`
+  - **功能**：接收用户 ID，返回该用户发布的菜谱总数。
+  - **优势**：将计算逻辑下沉（Logic Push-down）至数据库端执行，减少了数据传输开销。
+
+#### 应用级权限控制 (Application-level RBAC)
+
+鉴于项目要求统一使用 `sustc` 用户连接数据库，我们实现了**应用层级**的细粒度权限管理：
+
+- **鉴权逻辑**：在涉及数据修改（如 `deleteRecipe`, `updateTimes`）的 Service 层接口中，强制进行所有权检查。
+- **实现方式**：
+  1. 根据目标资源 ID（如 `recipe_id`）查询其 `author_id`。
+  2. 将查询结果与 HTTP Header 中传入的当前登录用户 `Auth-Id` 进行比对。
+  3. 若不匹配，立即抛出 `SecurityException`。
+- **安全保障**：确保用户只能操作属于自己的数据，有效防止了水平越权攻击（IDOR）。
 
 ### 2. 其他要求与亮点
 
-*(在此处总结除了基础API之外的系统级优化，例如连接池配置、索引优化策略，或者额外的加分项)*
+#### 高性能连接池配置 (Connection Pooling)
+
+系统集成了 **HikariCP** 作为数据库连接池，这是目前 Java 生态中性能最优的解决方案之一。我们拒绝使用默认配置，而是结合项目并发需求进行了显式调优：
+
+- **关键配置**：
+  - `maximum-pool-size=20`：限制最大连接数，防止数据库连接耗尽。
+  - `minimum-idle=5`：维持最小空闲连接，减少突发流量下的连接创建延迟。
+- **效果**：在高并发基准测试下，有效管理了数据库连接生命周期，杜绝了连接泄露问题。
+
+#### 海量数据查询优化策略
+
+针对千万级数据量的查询场景，采用了多维度的优化手段：
+
+- **索引优化 (Indexing)**：
+  - 在 `createBasicTables` 阶段，针对高频查询字段建立了 B-Tree 索引。
+  - **实例**：`CREATE INDEX idx_recipe_rating ON recipe(aggr_rating DESC)` 加速高分菜谱排序；`idx_recipe_name` 加速模糊搜索。
+- **强制分页 (Pagination)**：
+  - 所有列表类接口（Search, Feed）均强制要求分页参数。
+  - 使用 PostgreSQL 的 `LIMIT ? OFFSET ?` 语法，避免一次性加载过多数据导致内存溢出（OOM）。
+
+#### 交互设计
+
+- **整体架构**：采用 **Spring Boot + PostgreSQL + Vue 3** 的前后端分离架构，通过标准的 RESTful API 进行通信。
+- **前端 GUI 亮点**：
+  - **视觉风格**：实现了深色模式（Dark Mode）与玻璃拟态（Glassmorphism）设计。
+  - **交互体验**：
+    - **乐观更新 (Optimistic UI)**：在“关注”与“点赞”操作中，前端UI先行响应变色，后台异步请求，极大提升了用户感知的流畅度。
+    - **动效反馈**：详情页加载时采用 3D 信封开启 CSS 动画，提升应用的趣味性。
