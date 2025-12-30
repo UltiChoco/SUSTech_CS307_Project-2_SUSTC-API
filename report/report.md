@@ -7,11 +7,15 @@
 | 姓名  | 学号 | Lab | 具体分工  | 贡献比|
 | :--- | :--- | :--- | :--- | :--- |
 | 刘以煦 | 12410148 | 周三56节lab | 数据库设计，ER图，API优化 | 50 |
-| 刘君昊 | 12410303 | 周四34节lab | [请在此处填写具体负责的任务/模块] | 50 |
+| 刘君昊 | 12410303 | 周四34节lab | API设计优化，前端搭建，GUI设计 | 50 |
 
 ---
 
-## 二、数据库设计
+## 二、项目整体架构
+
+![project structure](project_structure.png)
+
+## 三、数据库设计
 
 ### E-R 图
 
@@ -135,7 +139,7 @@
 
 ---
 
-## 三、基础API实现
+## 四、基础API实现
 
 ### 1. DatabaseServiceImpl
 
@@ -192,7 +196,7 @@
     - 同时更新 `follower`（发起者）的 `following` 字段和 `blogger`（被关注者）的 `followers` 字段。
     - 保证了两个账户计数器变更的原子性，并减少了一次数据库 IO。
 
-- **`updateProfile` (更新信息)**
+- **`updateProfile`**
   - **动态更新**：利用 SQL `COALESCE(?, gender)` 函数，仅当传入参数不为 NULL 时更新字段，否则保持原值。避免了 Java 层面的动态 SQL 拼接。
 
 ### 3. RecipeServiceImpl
@@ -242,11 +246,11 @@
 
 ---
 
-## 四、高级API实现与其他要求
+## 五、高级API实现与其他要求
 
 ### 1. 高级功能实现
 
-#### 数据库高级对象 (Advanced Objects)
+#### 数据库高级对象
 
 为了提升数据库层面的逻辑复用性与查询效率，在 `DatabaseServiceImpl` 的 `createAdvancedDatabaseObjects` 方法中部署了视图与存储过程：
 
@@ -273,7 +277,7 @@
 
 ### 2. 其他要求与亮点
 
-#### 高性能连接池配置 (Connection Pooling)
+#### 高性能连接池配置
 
 系统集成了 **HikariCP** 作为数据库连接池，这是目前 Java 生态中性能最优的解决方案之一。我们拒绝使用默认配置，而是结合项目并发需求进行了显式调优：
 
@@ -296,7 +300,7 @@
 #### 交互设计
 
 - **整体架构**：采用 **Spring Boot + PostgreSQL + Vue 3** 的前后端分离架构，通过标准的 RESTful API 进行通信。
-- **前端 GUI 亮点**：
+- **前端 GUI**：
   - **视觉风格**：实现了深色模式（Dark Mode）与玻璃拟态（Glassmorphism）设计。
   - **交互体验**：
     - **乐观更新 (Optimistic UI)**：在“关注”与“点赞”操作中，前端UI先行响应变色，后台异步请求，极大提升了用户感知的流畅度。
