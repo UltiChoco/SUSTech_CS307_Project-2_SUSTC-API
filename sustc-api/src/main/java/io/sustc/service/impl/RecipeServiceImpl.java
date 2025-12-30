@@ -91,7 +91,7 @@ public class RecipeServiceImpl implements RecipeService {
 
         StringBuilder whereClause = new StringBuilder(" WHERE 1=1 ");
         List<Object> args = new ArrayList<>();
-        
+
         if (keyword != null && !keyword.isEmpty()) {
             whereClause.append(" AND (r.dish_name ILIKE ? OR r.description ILIKE ?) ");
             String pattern = "%" + keyword + "%";
@@ -139,7 +139,7 @@ public class RecipeServiceImpl implements RecipeService {
         } else {
             fetchSql.append(" ORDER BY r.recipe_id ASC ");
         }
-        
+
         fetchSql.append(" LIMIT ? OFFSET ? ");
         args.add(size);
         args.add((page - 1) * size);
@@ -157,7 +157,7 @@ public class RecipeServiceImpl implements RecipeService {
                     JOIN ingredient i ON hi.ingredient_id = i.ingredient_id 
                     WHERE hi.recipe_id IN (%s) 
                     """, placeholders);
-            
+
             Map<Long, List<String>> ingredientsMap = new HashMap<>();
             jdbcTemplate.query(batchIngSql, (rs) -> {
                 long rid = rs.getLong("recipe_id");
@@ -200,8 +200,8 @@ public class RecipeServiceImpl implements RecipeService {
                 saturated_fat, cholesterol, sodium, carbohydrate, fiber, sugar, protein) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
-        
-        jdbcTemplate.update(sql, newId, userId, dto.getName(), Timestamp.from(Instant.now()), 
+
+        jdbcTemplate.update(sql, newId, userId, dto.getName(), Timestamp.from(Instant.now()),
                 dto.getCookTime(), dto.getPrepTime(), dto.getDescription(), dto.getRecipeCategory(),
                 null, 0, dto.getRecipeYield(), dto.getRecipeServings(), dto.getCalories(), dto.getFatContent(),
                 dto.getSaturatedFatContent(), dto.getCholesterolContent(), dto.getSodiumContent(),

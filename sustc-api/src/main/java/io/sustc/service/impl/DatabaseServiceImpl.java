@@ -30,7 +30,7 @@ public class DatabaseServiceImpl implements DatabaseService {
 
     @Override
     public List<Integer> getGroupMembers() {
-        return Arrays.asList(12410303);
+        return Arrays.asList(12410303, 12410148);
     }
 
     @Override
