@@ -2,6 +2,7 @@
 
 ![Course](https://img.shields.io/badge/sustech-cs307%2F213-blue)
 ![Project2](https://img.shields.io/badge/25_fall-project_2-green)
+![Grade](https://img.shields.io/badge/Grade-105.68/110-blue)
 
 The recipe website named **Sus**tainable **T**echnology for **C**ook(SUSTC), which is devoted to promoting a sustainable lifestyle of cooking by oneself. Since you have learned about how mass the website was. Now hiring your team to build a new backend system for them. Please use the code in this repository as a
 template to start your work.
